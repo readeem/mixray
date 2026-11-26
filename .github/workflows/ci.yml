@@ -20,4 +20,21 @@ jobs:
       - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
         with:
           cache: ${{ github.ref_type != 'tag' }}
+      - name: cache go modules
+        if: github.ref_type != 'tag'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-mod-${{ runner.os }}-
+      - name: cache go build
+        if: github.ref_type != 'tag'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ hashFiles('mise.lock') }}-${{ hashFiles('go.sum') }}-${{ hashFiles('**/*.go') }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ hashFiles('mise.lock') }}-${{ hashFiles('go.sum') }}-
+            go-build-${{ runner.os }}-${{ hashFiles('mise.lock') }}-
       - run: mise run check
