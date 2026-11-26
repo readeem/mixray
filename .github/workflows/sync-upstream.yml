@@ -1,0 +1,72 @@
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Optional upstream mihomo tag (defaults to latest v1.* release)
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: jdx/mise-action@d5574b52816a478f9d4e6529a3f6ff17a8a36785 # v5.2.8
+      - name: sync upstream release
+        id: sync
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          before=$(jq -er '.mihomo.version' upstream.json)
+          if [[ -n $INPUT_VERSION ]]; then
+            ./scripts/sync-upstream.sh "$INPUT_VERSION"
+          else
+            ./scripts/sync-upstream.sh
+          fi
+          after=$(jq -er '.mihomo.version' upstream.json)
+          if git diff --quiet && [[ -z $(git status --porcelain) ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf 'changed=true\nbefore=%s\nafter=%s\n' "$before" "$after" >> "$GITHUB_OUTPUT"
+      - name: check updated tree
+        if: steps.sync.outputs.changed == 'true'
+        run: |
+          mise run check
+          mise run vulncheck
+      - name: open pull request
+        if: steps.sync.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ steps.sync.outputs.before }}
+          AFTER: ${{ steps.sync.outputs.after }}
+        run: |
+          branch="chore/sync-mihomo-${AFTER}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add -A
+          git commit -m "chore(upstream): sync mihomo ${AFTER}"
+          git push --force-with-lease "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "HEAD:refs/heads/${branch}"
+          if ! gh pr view "$branch" >/dev/null 2>&1; then
+            gh pr create \
+              --head "$branch" \
+              --base main \
+              --title "chore(upstream): sync mihomo ${AFTER}" \
+              --body "Automated upstream sync of MetaCubeX/mihomo from ${BEFORE} to ${AFTER}."
+          fi

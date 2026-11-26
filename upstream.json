@@ -1,0 +1,9 @@
+{
+  "mihomo": {
+    "module": "github.com/metacubex/mihomo",
+    "repo": "MetaCubeX/mihomo",
+    "version": "v1.19.34",
+    "sum": "h1:+nkzw4xRehvk2ldLHMelXszd0ES1ysE/ArL92KPfQno=",
+    "gomod_sum": "h1:Hlv3FJhuInvgHLuaSRkBpn5+at5eFS5QlybKlZ5RJP4="
+  }
+}
