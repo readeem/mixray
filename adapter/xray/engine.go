@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"reflect"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -81,20 +82,110 @@ func prepareBatches(customTrust bool, roots func() *x509.CertPool) PrepareProxie
 					continue
 				}
 				batch.roots = roots
+				batch.useRoots = true
 			}
 
-			batch.proxies = append(batch.proxies, ProxySpec{Name: proxy.Name(), Type: kind, Options: options})
+			batch.specs = append(batch.specs, ProxySpec{Name: proxy.Name(), Type: kind, Options: options})
 			proxy.ProxyAdapter = &batchedOutbound{ProxyAdapter: proxy.ProxyAdapter.(outbound.ProxyAdapter), batch: batch}
 		}
 	}
 }
 
 func RetireProxy(proxy C.Proxy) {
-	if p, ok := proxy.(*adapter.Proxy); ok {
-		if owned, ok := p.ProxyAdapter.(interface{ Retire() }); ok {
-			owned.Retire()
+	if proxy == nil {
+		return
+	}
+	if owned, ok := proxy.Adapter().(interface{ Retire() }); ok {
+		owned.Retire()
+	}
+}
+
+func batchOf(proxy C.Proxy) *batchedOutbound {
+	if proxy == nil {
+		return nil
+	}
+	bo, _ := proxy.Adapter().(*batchedOutbound)
+	return bo
+}
+
+// AdoptBatches reuses active Xray outbound batches whose normalized proxy specs
+// and trust policy are unchanged across a reload, keeping live connections open.
+func AdoptBatches(oldProxies, newProxies map[string]C.Proxy) {
+	if len(oldProxies) == 0 || len(newProxies) == 0 {
+		return
+	}
+	seenOld := make(map[*outboundBatch]struct{})
+	var oldBatches []*outboundBatch
+	for _, proxy := range oldProxies {
+		bo := batchOf(proxy)
+		if bo == nil {
+			continue
+		}
+		if _, seen := seenOld[bo.batch]; seen {
+			continue
+		}
+		seenOld[bo.batch] = struct{}{}
+		if !bo.batch.isRetired() {
+			oldBatches = append(oldBatches, bo.batch)
 		}
 	}
+	if len(oldBatches) == 0 {
+		return
+	}
+	newGroups := make(map[*outboundBatch][]*batchedOutbound)
+	for _, proxy := range newProxies {
+		if bo := batchOf(proxy); bo != nil {
+			newGroups[bo.batch] = append(newGroups[bo.batch], bo)
+		}
+	}
+	for newBatch, outs := range newGroups {
+		for _, oldBatch := range oldBatches {
+			if oldBatch.useRoots == newBatch.useRoots && reflect.DeepEqual(oldBatch.specs, newBatch.specs) {
+				for _, bo := range outs {
+					bo.batch = oldBatch
+				}
+				break
+			}
+		}
+	}
+}
+
+// RetireUnused retires every proxy in oldProxies whose Xray batch is not still
+// referenced by activeProxies.
+func RetireUnused(oldProxies, activeProxies map[string]C.Proxy) {
+	active := activeBatches(activeProxies)
+	for _, proxy := range oldProxies {
+		retireIfUnused(proxy, active)
+	}
+}
+
+// RetireUnusedSlice retires every proxy in oldProxies whose Xray batch is not
+// still referenced by activeProxies.
+func RetireUnusedSlice(oldProxies []C.Proxy, activeProxies map[string]C.Proxy) {
+	active := activeBatches(activeProxies)
+	for _, proxy := range oldProxies {
+		retireIfUnused(proxy, active)
+	}
+}
+
+func activeBatches(proxies map[string]C.Proxy) map[*outboundBatch]struct{} {
+	active := make(map[*outboundBatch]struct{})
+	for _, proxy := range proxies {
+		if bo := batchOf(proxy); bo != nil {
+			active[bo.batch] = struct{}{}
+		}
+	}
+	return active
+}
+
+func retireIfUnused(proxy C.Proxy, active map[*outboundBatch]struct{}) {
+	if bo := batchOf(proxy); bo != nil {
+		if _, keep := active[bo.batch]; !keep {
+			bo.Retire()
+		}
+		return
+	}
+	RetireProxy(proxy)
 }
 
 func Wrap(base outbound.ProxyAdapter, native *Outbound) outbound.ProxyAdapter {
@@ -276,11 +367,19 @@ func decodeOption[T any](decoder *structure.Decoder, value any) (T, error) {
 }
 
 type outboundBatch struct {
-	mu      sync.Mutex
-	proxies []ProxySpec
-	roots   func() *x509.CertPool
-	engine  *Outbounds
-	retired bool
+	mu       sync.Mutex
+	specs    []ProxySpec
+	roots    func() *x509.CertPool
+	useRoots bool
+	started  bool
+	engine   *Outbounds
+	retired  bool
+}
+
+func (b *outboundBatch) isRetired() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.retired
 }
 
 func (b *outboundBatch) get(name string) (*Outbound, error) {
@@ -290,18 +389,20 @@ func (b *outboundBatch) get(name string) (*Outbound, error) {
 		return nil, net.ErrClosed
 	}
 	// Validation and rejected updates never start engines.
-	if len(b.proxies) != 0 {
+	if !b.started {
+		b.started = true
 		var roots *x509.CertPool
 		if b.roots != nil {
 			roots = b.roots()
 		}
-		engine, err := New(b.proxies, MihomoNetwork{}, roots)
-		b.proxies = nil
 		b.roots = nil
-		if err != nil {
-			log.Warnln("Xray outbounds unavailable: %s", err)
+		if len(b.specs) != 0 {
+			engine, err := New(b.specs, MihomoNetwork{}, roots)
+			if err != nil {
+				log.Warnln("Xray outbounds unavailable: %s", err)
+			}
+			b.engine = engine
 		}
-		b.engine = engine
 	}
 	if b.engine == nil {
 		return nil, nil
@@ -313,7 +414,7 @@ func (b *outboundBatch) retire() {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.retired = true
-	b.proxies = nil
+	b.started = true
 	b.roots = nil
 	if b.engine != nil {
 		if err := b.engine.Close(); err != nil {

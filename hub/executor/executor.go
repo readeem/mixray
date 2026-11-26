@@ -311,19 +311,20 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 
 func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
 	oldProxies, oldProviders := tunnel.Proxies(), tunnel.Providers()
+	xray.AdoptBatches(oldProxies, proxies)
 	tunnel.UpdateProxies(proxies, providers)
-	retireProxies(oldProxies, oldProviders)
+	retireProxies(oldProxies, oldProviders, proxies)
 }
 
-func retireProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
+func retireProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider, active map[string]C.Proxy) {
 	for _, provider := range providers {
-		if owned, ok := provider.(interface{ RetireProxies() }); ok {
+		if owned, ok := provider.(interface{ RetireUnusedProxies(map[string]C.Proxy) }); ok {
+			owned.RetireUnusedProxies(active)
+		} else if owned, ok := provider.(interface{ RetireProxies() }); ok {
 			owned.RetireProxies()
 		}
 	}
-	for _, proxy := range proxies {
-		xray.RetireProxy(proxy)
-	}
+	xray.RetireUnused(proxies, active)
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
@@ -548,7 +549,7 @@ func updateIPTables(cfg *config.Config) {
 func Shutdown() {
 	mux.Lock()
 	defer mux.Unlock()
-	retireProxies(tunnel.Proxies(), tunnel.Providers())
+	retireProxies(tunnel.Proxies(), tunnel.Providers(), nil)
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()

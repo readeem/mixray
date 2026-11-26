@@ -75,6 +75,41 @@ func TestReloadAndProviderRefreshRetireActiveOutbounds(t *testing.T) {
 		holdOutbound(t, listener, second.Proxies["Second"])
 	})
 
+	t.Run("unchanged proxies stay open across reload", func(t *testing.T) {
+		first := parse(t, append(payload("Same"), "rules: ['DOMAIN,a.example,Same']\n"...))
+		executor.ApplyConfig(first, true)
+		t.Cleanup(executor.Shutdown)
+		wire := holdOutbound(t, listener, first.Proxies["Same"])
+
+		second := parse(t, append(payload("Same"), "rules: ['DOMAIN,b.example,Same']\n"...))
+		executor.ApplyConfig(second, true)
+		if err := wire.SetReadDeadline(time.Now().Add(50 * time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+		var b [1]byte
+		if _, err := wire.Read(b[:]); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("reload with identical proxies closed active connection: %v", err)
+		}
+		wire.SetReadDeadline(time.Time{})
+
+		third := parse(t, payload("Other"))
+		executor.ApplyConfig(third, true)
+		requireRetired(t, second.Proxies["Same"], wire)
+	})
+
+	t.Run("wrapped proxy retires", func(t *testing.T) {
+		type wrapped struct{ C.Proxy }
+		cfg := parse(t, payload("Wrapped"))
+		cfg.Proxies["Wrapped"] = wrapped{Proxy: cfg.Proxies["Wrapped"]}
+		executor.ApplyConfig(cfg, true)
+		t.Cleanup(executor.Shutdown)
+		wire := holdOutbound(t, listener, cfg.Proxies["Wrapped"])
+
+		next := parse(t, payload("Replacement"))
+		executor.ApplyConfig(next, true)
+		requireRetired(t, cfg.Proxies["Wrapped"], wire)
+	})
+
 	t.Run("provider refresh", func(t *testing.T) {
 		cfg := parse(t, []byte("proxy-providers:\n  file:\n    type: file\n    path: ./provider.yaml\n"))
 		provider := cfg.Providers["file"]

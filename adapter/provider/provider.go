@@ -123,12 +123,14 @@ func (bp *baseProvider) setProxies(proxies []C.Proxy) {
 }
 
 func (bp *baseProvider) RetireProxies() {
+	bp.RetireUnusedProxies(nil)
+}
+
+func (bp *baseProvider) RetireUnusedProxies(active map[string]C.Proxy) {
 	bp.mutex.Lock()
 	defer bp.mutex.Unlock()
 	bp.retired = true
-	for _, proxy := range bp.proxies {
-		xray.RetireProxy(proxy)
-	}
+	xray.RetireUnusedSlice(bp.proxies, active)
 }
 
 func (bp *baseProvider) Close() error {
