@@ -208,6 +208,7 @@ type Metadata struct {
 	Uid          uint32     `json:"uid"`
 	Process      string     `json:"process"`
 	ProcessPath  string     `json:"processPath"`
+	ProcessError error      `json:"-"`
 	SpecialProxy string     `json:"specialProxy"`
 	SpecialRules string     `json:"specialRules"`
 	RemoteDst    string     `json:"remoteDestination"`

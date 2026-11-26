@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"path"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 	"unicode"
 	"unsafe"
 
@@ -23,6 +26,8 @@ import (
 
 const (
 	SOCK_DIAG_BY_FAMILY  = 20
+	inetDiagV6Only       = 11
+	tcpListen            = 10
 	inetDiagRequestSize  = int(unsafe.Sizeof(inetDiagRequest{}))
 	inetDiagResponseSize = int(unsafe.Sizeof(inetDiagResponse{}))
 )
@@ -62,8 +67,19 @@ type inetDiagResponse struct {
 	INode   uint32
 }
 
-func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string, error) {
-	uid, inode, err := resolveSocketByNetlink(network, ip, srcPort)
+func findProcessName(network string, ip netip.Addr, srcPort int, peer netip.AddrPort) (uint32, string, error) {
+	ip = ip.Unmap()
+	uid, inode, err := resolveSocketByNetlink(network, ip, srcPort, peer)
+	if ip.Is4() && (errors.Is(err, ErrNotFound) || err == nil && strings.HasPrefix(network, "udp")) {
+		// An IPv4 flow may belong to an IPv6 dual-stack socket.
+		v6UID, v6Inode, v6Err := resolveSocketByNetlink(network, netip.AddrFrom16(ip.As16()), srcPort, peer)
+		if !errors.Is(v6Err, ErrNotFound) {
+			if err == nil && v6Err == nil {
+				return 0, "", ErrAmbiguousSocket
+			}
+			uid, inode, err = v6UID, v6Inode, v6Err
+		}
+	}
 	if runtime.GOOS == "android" {
 		// on Android (especially recent releases), netlink INET_DIAG can fail or return UID 0 / empty process info for some apps
 		// so trying fallback to resolve /proc/net/{tcp,tcp6,udp,udp6}
@@ -90,7 +106,7 @@ func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string
 	return uid, pp, err
 }
 
-func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uint32, inode uint32, err error) {
+func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int, peer netip.AddrPort) (uid, inode uint32, err error) {
 	request := &inetDiagRequest{
 		States: 0xffffffff,
 		Cookie: [2]uint32{0xffffffff, 0xffffffff},
@@ -119,6 +135,9 @@ func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uin
 		return 0, 0, err
 	}
 	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		return 0, 0, err
+	}
 
 	message := netlink.Message{
 		Header: netlink.Header{
@@ -133,45 +152,73 @@ func resolveSocketByNetlink(network string, ip netip.Addr, srcPort int) (uid uin
 		return 0, 0, err
 	}
 
-	err = ErrNotFound
+	udp := request.Protocol == unix.IPPROTO_UDP
+	local := ip.Unmap().WithZone("")
+	remote := peer.Addr().Unmap().WithZone("")
 	for _, msg := range messages {
 		if len(msg.Data) < inetDiagResponseSize {
 			continue
 		}
-
 		response := (*inetDiagResponse)(unsafe.Pointer(&msg.Data[0]))
-
-		// always set to allow fallback when check fails
-		uid, inode, err = response.UID, response.INode, nil
-
-		// check src port
-		if binary.BigEndian.Uint16(response.SrcPort[:]) != uint16(srcPort) {
+		if response.Family != request.Family || response.INode == 0 || binary.BigEndian.Uint16(response.SrcPort[:]) != uint16(srcPort) {
 			continue
 		}
-
-		// check src IP
-		var src netip.Addr
-		switch response.Family {
-		case unix.AF_INET:
-			var a [4]byte
-			copy(a[:], response.Src[:4])
-			src = netip.AddrFrom4(a)
-		case unix.AF_INET6:
-			var a [16]byte
-			copy(a[:], response.Src[:])
-			src = netip.AddrFrom16(a).Unmap()
-		default:
+		if !udp && (response.State == tcpListen || peer.IsValid() &&
+			(binary.BigEndian.Uint16(response.DstPort[:]) != peer.Port() || socketAddress(response.Family, response.Dst) != remote)) {
 			continue
 		}
-		if src != ip.Unmap() {
+		src := socketAddress(response.Family, response.Src)
+		if src != local && !(udp && src.IsUnspecified() && localAddress(local) &&
+			(!ip.Is4In6() || dualStackWildcard(msg.Data[inetDiagResponseSize:]))) {
 			continue
 		}
-
-		// this is the one we want
-		break
+		// Linux lets connected UDP sockets send to a different peer with sendto.
+		if inode != 0 && inode != response.INode {
+			return 0, 0, ErrAmbiguousSocket
+		}
+		uid, inode = response.UID, response.INode
 	}
+	if inode == 0 {
+		return 0, 0, ErrNotFound
+	}
+	return uid, inode, nil
+}
 
-	return
+func socketAddress(family byte, address [16]byte) netip.Addr {
+	if family == unix.AF_INET {
+		return netip.AddrFrom4([4]byte(address[:4]))
+	}
+	return netip.AddrFrom16(address).Unmap()
+}
+
+func dualStackWildcard(attributes []byte) bool {
+	decoder, err := netlink.NewAttributeDecoder(attributes)
+	if err != nil {
+		return false
+	}
+	for decoder.Next() {
+		if decoder.Type() == inetDiagV6Only {
+			v6only := decoder.Uint8()
+			return decoder.Err() == nil && v6only == 0
+		}
+	}
+	return false
+}
+
+func localAddress(ip netip.Addr) bool {
+	if ip.IsLoopback() {
+		return true
+	}
+	addresses, err := net.InterfaceAddrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addresses {
+		if network, ok := addr.(*net.IPNet); ok && network.IP.Equal(ip.AsSlice()) {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
@@ -183,12 +230,16 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 	buffer := make([]byte, unix.PathMax)
 	socket := fmt.Appendf(nil, "socket:[%d]", inode)
 
+	var denied error
 	for _, f := range files {
 		if !f.IsDir() || !isPid(f.Name()) {
 			continue
 		}
 
 		info, err := f.Info()
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return "", err
 		}
@@ -201,12 +252,18 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 
 		fds, err := os.ReadDir(fdPath)
 		if err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				denied = err
+			}
 			continue
 		}
 
 		for _, fd := range fds {
 			n, err := unix.Readlink(filepath.Join(fdPath, fd.Name()), buffer)
 			if err != nil {
+				if errors.Is(err, os.ErrPermission) {
+					denied = err
+				}
 				continue
 			}
 
@@ -227,7 +284,10 @@ func resolveProcessNameByProcSearch(inode, uid uint32) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("process of uid(%d),inode(%d) not found", uid, inode)
+	if denied != nil {
+		return "", denied
+	}
+	return "", ErrOwnerNotFound
 }
 
 // resolveProcessNameByUID returns a process name for any process with uid.

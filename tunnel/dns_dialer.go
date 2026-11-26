@@ -28,6 +28,7 @@ func NewDNSDialer(r resolver.Resolver, proxyAdapter C.ProxyAdapter, proxyName st
 }
 
 func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	observe := statistic.CaptureConnection()
 	r := d.r
 	proxyName := d.proxyName
 	proxyAdapter := d.proxyAdapter
@@ -102,7 +103,7 @@ func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.
 		}
 		logMetadata(metadata, rule, conn)
 
-		conn = statistic.NewTCPTracker(conn, statistic.DefaultManager, metadata, rule, 0, 0, false)
+		conn = statistic.NewTCPTracker(conn, statistic.DefaultManager, metadata, rule, 0, 0, false, observe)
 
 		return conn, nil
 	} else {
@@ -121,7 +122,7 @@ func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.
 		}
 		logMetadata(metadata, rule, packetConn)
 
-		packetConn = statistic.NewUDPTracker(packetConn, statistic.DefaultManager, metadata, rule, 0, 0, false)
+		packetConn = statistic.NewUDPTracker(packetConn, statistic.DefaultManager, metadata, rule, 0, 0, false, observe)
 
 		return N.NewBindPacketConn(packetConn, metadata.UDPAddr()), nil
 	}
@@ -129,6 +130,7 @@ func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.
 }
 
 func (d *DNSDialer) ListenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {
+	observe := statistic.CaptureConnection()
 	r := d.r
 	proxyAdapter := d.proxyAdapter
 	proxyName := d.proxyName
@@ -183,7 +185,7 @@ func (d *DNSDialer) ListenPacket(ctx context.Context, network, addr string) (net
 	}
 	logMetadata(metadata, rule, packetConn)
 
-	packetConn = statistic.NewUDPTracker(packetConn, statistic.DefaultManager, metadata, rule, 0, 0, false)
+	packetConn = statistic.NewUDPTracker(packetConn, statistic.DefaultManager, metadata, rule, 0, 0, false, observe)
 
 	return packetConn, nil
 }

@@ -19,9 +19,9 @@ import (
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/quic-go"
-	qtls "github.com/metacubex/sing-quic"
-	"github.com/metacubex/sing-quic/hysteria2"
-	"github.com/metacubex/sing-quic/hysteria2/realm"
+	qtls "github.com/readeem/mixray/internal/sing-quic"
+	"github.com/readeem/mixray/internal/sing-quic/hysteria2"
+	"github.com/readeem/mixray/internal/sing-quic/hysteria2/realm"
 	M "github.com/metacubex/sing/common/metadata"
 	"github.com/metacubex/tls"
 )

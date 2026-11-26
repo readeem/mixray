@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 
 	"github.com/readeem/mixray/adapter/inbound"
+	"github.com/readeem/mixray/adapter/xray"
 	"github.com/readeem/mixray/component/dialer"
 	"github.com/readeem/mixray/component/process"
 	"github.com/readeem/mixray/component/resolver"
@@ -51,6 +52,7 @@ type configSchema struct {
 	LanDisAllowedIPs  *[]netip.Prefix          `json:"lan-disallowed-ips"`
 	BindAddress       *string                  `json:"bind-address"`
 	Mode              *tunnel.TunnelMode       `json:"mode"`
+	Engine            *C.Engine                `json:"engine"`
 	LogLevel          *log.LogLevel            `json:"log-level"`
 	IPv6              *bool                    `json:"ipv6"`
 	Sniffing          *bool                    `json:"sniffing"`
@@ -385,6 +387,10 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 
 	if general.Mode != nil {
 		tunnel.SetMode(*general.Mode)
+	}
+
+	if general.Engine != nil {
+		xray.SetEngine(*general.Engine)
 	}
 
 	if general.FindProcessMode != nil {

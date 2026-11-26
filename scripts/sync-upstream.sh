@@ -8,21 +8,56 @@ export GOWORK=off
 # shellcheck source=scripts/lib.sh
 source "$root/scripts/lib.sh"
 
-target_module="github.com/readeem/mixray"
-module=$(jq -er '.mihomo.module' upstream.json)
-repo=$(jq -er '.mihomo.repo' upstream.json)
-current_version=$(jq -er '.mihomo.version' upstream.json)
-current_sum=$(jq -er '.mihomo.sum' upstream.json)
-current_gomod_sum=$(jq -er '.mihomo.gomod_sum' upstream.json)
+root_module="github.com/readeem/mixray"
 
-if (( $# > 1 )); then
-  printf 'usage: %s [vX.Y.Z]\n' "$0" >&2
+# Usage:
+#   sync-upstream.sh [vX.Y.Z]              # sync mihomo (default)
+#   sync-upstream.sh <vendored-name> <ver> # sync a vendored module in upstream.json
+mode=root
+name=mihomo
+target_version=""
+
+if (( $# == 0 )); then
+  :
+elif (( $# == 1 )); then
+  if jq -e --arg n "$1" '.vendored[$n] != null' upstream.json >/dev/null; then
+    printf 'usage: %s %s <version>\n' "$0" "$1" >&2
+    exit 2
+  fi
+  target_version=$1
+elif (( $# == 2 )); then
+  if [[ $1 == mihomo ]]; then
+    target_version=$2
+  elif jq -e --arg n "$1" '.vendored[$n] != null' upstream.json >/dev/null; then
+    mode=vendored
+    name=$1
+    target_version=$2
+  else
+    printf 'Unknown upstream target: %s\n' "$1" >&2
+    exit 2
+  fi
+else
+  printf 'usage: %s [target] [version]\n' "$0" >&2
   exit 2
 fi
 
-if (( $# == 1 )); then
-  target_version=$1
+if [[ $mode == root ]]; then
+  jq_path='.mihomo'
+  dest_prefix=""
+  target_module="$root_module"
 else
+  jq_path=".vendored[\"$name\"]"
+  dest_prefix=$(jq -er "$jq_path.path" upstream.json)
+  target_module="$root_module/$dest_prefix"
+fi
+
+module=$(jq -er "$jq_path.module" upstream.json)
+repo=$(jq -er "$jq_path.repo" upstream.json)
+current_version=$(jq -er "$jq_path.version" upstream.json)
+current_sum=$(jq -er "$jq_path.sum" upstream.json)
+current_gomod_sum=$(jq -er "$jq_path.gomod_sum" upstream.json)
+
+if [[ -z $target_version ]]; then
   target_version=$(git ls-remote --tags --sort=-v:refname "https://github.com/$repo.git" 'v1.*' \
     | awk -F/ '!found && $3 !~ /\^\{\}$/ && $3 ~ /^v[0-9]+\.[0-9]+\.[0-9]+$/ { print $3; found=1 }')
   [[ -n $target_version ]] || { printf 'Could not discover latest %s release tag\n' "$repo" >&2; exit 1; }
@@ -36,8 +71,8 @@ fi
 work=$(mktemp -d)
 trap 'rm -rf -- "$work"' EXIT
 
-prepare_upstream_snapshot "$module" "$current_version" "$current_sum" "$current_gomod_sum" "$work/base" "$target_module" >/dev/null
-IFS=$'\t' read -r next_sum next_gomod_sum < <(prepare_upstream_snapshot "$module" "$target_version" "" "" "$work/next" "$target_module")
+prepare_snapshot "$mode" "$module" "$current_version" "$current_sum" "$current_gomod_sum" "$work/base" "$target_module" >/dev/null
+IFS=$'\t' read -r next_sum next_gomod_sum next_src < <(prepare_snapshot "$mode" "$module" "$target_version" "" "" "$work/next" "$target_module")
 
 mapfile -t files < <(
   {
@@ -51,6 +86,9 @@ for rel in "${files[@]}"; do
   case "$rel" in
     go.mod|go.sum) continue ;;
   esac
+  local_path="$rel"
+  [[ -n $dest_prefix ]] && local_path="$dest_prefix/$rel"
+
   in_base=false
   in_next=false
   [[ -f $work/base/$rel ]] && in_base=true
@@ -60,32 +98,32 @@ for rel in "${files[@]}"; do
     if cmp -s "$work/base/$rel" "$work/next/$rel"; then
       continue
     fi
-    if [[ ! -f $rel ]]; then
-      printf 'Upstream modified locally deleted file: %s\n' "$rel" >&2
-      conflicts+=("$rel")
+    if [[ ! -f $local_path ]]; then
+      printf 'Upstream modified locally deleted file: %s\n' "$local_path" >&2
+      conflicts+=("$local_path")
       continue
     fi
     if ! git merge-file -L "mixray" -L "upstream/$current_version" -L "upstream/$target_version" \
-      "$rel" "$work/base/$rel" "$work/next/$rel"; then
-      conflicts+=("$rel")
+      "$local_path" "$work/base/$rel" "$work/next/$rel"; then
+      conflicts+=("$local_path")
     fi
   elif ! $in_base && $in_next; then
-    mkdir -p "$(dirname "$rel")"
-    if [[ -f $rel ]]; then
+    mkdir -p "$(dirname "$local_path")"
+    if [[ -f $local_path ]]; then
       if ! git merge-file -L "mixray" -L "empty" -L "upstream/$target_version" \
-        "$rel" /dev/null "$work/next/$rel"; then
-        conflicts+=("$rel")
+        "$local_path" /dev/null "$work/next/$rel"; then
+        conflicts+=("$local_path")
       fi
     else
-      cp -p -- "$work/next/$rel" "$rel"
+      cp -p -- "$work/next/$rel" "$local_path"
     fi
   elif $in_base && ! $in_next; then
-    if [[ -f $rel ]]; then
-      if cmp -s "$rel" "$work/base/$rel"; then
-        rm -- "$rel"
+    if [[ -f $local_path ]]; then
+      if cmp -s "$local_path" "$work/base/$rel"; then
+        rm -- "$local_path"
       else
-        printf 'Upstream deleted locally modified file: %s\n' "$rel" >&2
-        conflicts+=("$rel")
+        printf 'Upstream deleted locally modified file: %s\n' "$local_path" >&2
+        conflicts+=("$local_path")
       fi
     fi
   fi
@@ -97,16 +135,22 @@ while IFS=$'\t' read -r p v; do
   [[ -n $p ]] && local_deps["$p"]=$v
 done < <(go mod edit -json | jq -r '.Require // [] | .[] | "\(.Path)\t\(.Version)"')
 
+declare -A vendored_modules=()
+while IFS= read -r vm; do
+  [[ -n $vm ]] && vendored_modules["$vm"]=1
+done < <(jq -r '.vendored // {} | .[].module' upstream.json)
+
 upgrades=()
 while IFS=$'\t' read -r p v; do
   [[ -n $p ]] || continue
+  [[ -n ${vendored_modules[$p]:-} ]] && continue
   cur=${local_deps[$p]:-}
   if [[ -z $cur ]]; then
     upgrades+=("$p@$v")
   elif [[ $cur != "$v" ]] && [[ $(printf '%s\n%s\n' "$cur" "$v" | sort -V | tail -n1) == "$v" ]]; then
     upgrades+=("$p@$v")
   fi
-done < <(go mod edit -json "$work/next/go.mod" | jq -r '.Require // [] | .[] | "\(.Path)\t\(.Version)"')
+done < <(go mod edit -json "$next_src/go.mod" | jq -r '.Require // [] | .[] | "\(.Path)\t\(.Version)"')
 
 if (( ${#upgrades[@]} )); then
   go get "${upgrades[@]}"
@@ -114,14 +158,14 @@ fi
 go mod tidy
 
 jq --arg v "$target_version" --arg s "$next_sum" --arg g "$next_gomod_sum" \
-  '.mihomo.version = $v | .mihomo.sum = $s | .mihomo.gomod_sum = $g' \
+  "$jq_path.version = \$v | $jq_path.sum = \$s | $jq_path.gomod_sum = \$g" \
   upstream.json > upstream.json.tmp
 mv upstream.json.tmp upstream.json
 
 if (( ${#conflicts[@]} )); then
-  printf 'Sync %s -> %s completed with conflicts in:\n' "$current_version" "$target_version" >&2
+  printf 'Sync %s %s -> %s completed with conflicts in:\n' "$name" "$current_version" "$target_version" >&2
   printf '  %s\n' "${conflicts[@]}" >&2
   exit 1
 fi
 
-printf 'Synced %s: %s -> %s\n' "$module" "$current_version" "$target_version" >&2
+printf 'Synced %s (%s): %s -> %s\n' "$name" "$module" "$current_version" "$target_version" >&2

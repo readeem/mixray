@@ -47,18 +47,21 @@ func AddCertificate(certificate string) error {
 }
 
 func initializeCertPool() {
-	var err error
-	if DisableSystemCa {
-		globalCertPool = x509.NewCertPool()
-	} else {
-		globalCertPool, err = x509.SystemCertPool()
-		if err != nil {
-			globalCertPool = x509.NewCertPool()
-		}
+	globalCertPool = NewCertPool()
+}
+
+func NewCertPool() *x509.CertPool {
+	var pool *x509.CertPool
+	if !DisableSystemCa {
+		pool, _ = x509.SystemCertPool()
+	}
+	if pool == nil {
+		pool = x509.NewCertPool()
 	}
 	if !DisableEmbedCa {
-		globalCertPool.AppendCertsFromPEM(_CaCertificates)
+		pool.AppendCertsFromPEM(_CaCertificates)
 	}
+	return pool
 }
 
 func ResetCertificate() {

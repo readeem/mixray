@@ -44,10 +44,12 @@ const (
 // CoreUpdater is the mihomo updater.
 // modify from https://github.com/AdguardTeam/AdGuardHome/blob/595484e0b3fb4c457f9bb727a6b94faa78a66c5f/internal/updater/updater.go
 type CoreUpdater struct {
-	mu sync.Mutex
+	// DisableStockUpdate prevents mixray from replacing itself with stock mihomo.
+	DisableStockUpdate bool
+	mu                 sync.Mutex
 }
 
-var DefaultCoreUpdater = CoreUpdater{}
+var DefaultCoreUpdater = CoreUpdater{DisableStockUpdate: true}
 
 func (u *CoreUpdater) CoreBaseName() string {
 	switch runtime.GOARCH {
@@ -83,6 +85,10 @@ func (u *CoreUpdater) CoreBaseName() string {
 func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) (err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
+
+	if u.DisableStockUpdate {
+		return fmt.Errorf("stock core updates are unavailable for this build")
+	}
 
 	info, err := os.Stat(currentExePath)
 	if err != nil {

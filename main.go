@@ -47,6 +47,7 @@ var (
 	externalControllerPipe        string
 	externalControllerRoutingMark int
 	secret                        string
+	engineOverride                string
 	postUp                        string
 	postDown                      string
 )
@@ -69,6 +70,7 @@ func init() {
 	flag.StringVar(&externalControllerPipe, "ext-ctl-pipe", os.Getenv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_PIPE"), "override external controller pipe address")
 	flag.IntVar(&externalControllerRoutingMark, "ext-ctl-routing-mark", getIntEnv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_ROUTING_MARK"), "override external controller routing mark")
 	flag.StringVar(&secret, "secret", os.Getenv("CLASH_OVERRIDE_SECRET"), "override secret for RESTful API")
+	flag.StringVar(&engineOverride, "engine", os.Getenv("CLASH_OVERRIDE_ENGINE"), "override proxy outbound engine (xray or mihomo)")
 	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
 	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
@@ -211,6 +213,13 @@ func main() {
 	}
 	if secret != "" {
 		options = append(options, hub.WithSecret(secret))
+	}
+	if engineOverride != "" {
+		engine, err := C.ParseEngine(engineOverride)
+		if err != nil {
+			log.Fatalln("Parse engine error: %s", err.Error())
+		}
+		options = append(options, hub.WithEngine(engine))
 	}
 
 	if err := hub.Parse(configBytes, options...); err != nil {

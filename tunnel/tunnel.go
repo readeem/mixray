@@ -314,24 +314,39 @@ func preHandleMetadata(metadata *C.Metadata) error {
 	return nil
 }
 
-func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
-	if metadata.SpecialProxy != "" {
-		var exist bool
-		proxy, exist = proxies[metadata.SpecialProxy]
-		if !exist {
-			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
-		}
+func resolveProcess(metadata *C.Metadata) {
+	if metadata.Type == C.INNER || metadata.Process != "" || !metadata.SrcIP.IsValid() || metadata.SrcIP.IsUnspecified() || metadata.SrcPort == 0 {
 		return
 	}
-	var (
-		resolved             bool
-		attemptProcessLookup = metadata.Type != C.INNER
-	)
-
-	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
-		metadata.DstIP, _ = node.RandIP()
-		resolved = true
+	if features.CMFA {
+		metadata.Process, metadata.ProcessError = process.FindPackageName(metadata)
+		return
 	}
+	peer := netip.AddrPortFrom(metadata.InIP, metadata.InPort)
+	switch metadata.Type {
+	case C.TUN, C.REDIR, C.TPROXY:
+		// For intercepted traffic the application dials the original destination.
+		peer = metadata.AddrPort()
+	}
+	if peer.Port() == 0 || peer.Addr().IsUnspecified() {
+		peer = netip.AddrPort{}
+	}
+	uid, path, err := process.FindProcessName(metadata.NetWork.String(), metadata.SrcIP, int(metadata.SrcPort), peer)
+	metadata.ProcessError = err
+	if err != nil {
+		log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
+		return
+	}
+	metadata.Process = filepath.Base(path)
+	metadata.ProcessPath = path
+	metadata.Uid = uid
+	if pkg, err := process.FindPackageName(metadata); err == nil {
+		metadata.Process = pkg
+	}
+}
+
+func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error) {
+	var resolved, helperFindProcessDone bool
 
 	helper := C.RuleMatchHelper{
 		ResolveIP: func() {
@@ -349,31 +364,9 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 			}
 		},
 		FindProcess: func() {
-			if attemptProcessLookup {
-				attemptProcessLookup = false
-				if !features.CMFA {
-					// normal check for process
-					uid, path, err := process.FindProcessName(metadata.NetWork.String(), metadata.SrcIP, int(metadata.SrcPort))
-					if err != nil {
-						log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
-					} else {
-						metadata.Process = filepath.Base(path)
-						metadata.ProcessPath = path
-						metadata.Uid = uid
-
-						if pkg, err := process.FindPackageName(metadata); err == nil { // for android (not CMFA) package names
-							metadata.Process = pkg
-						}
-					}
-				} else {
-					// check package names
-					pkg, err := process.FindPackageName(metadata)
-					if err != nil {
-						log.Debugln("[Process] find process error for %s: %v", metadata.String(), err)
-					} else {
-						metadata.Process = pkg
-					}
-				}
+			if !helperFindProcessDone {
+				helperFindProcessDone = true
+				resolveProcess(metadata)
 			}
 		},
 		CheckPassRule: func(adapterName string) bool {
@@ -391,11 +384,22 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 	}
 
 	switch FindProcessMode() {
-	case process.FindProcessAlways:
-		helper.FindProcess()
+	case process.FindProcessAlways, process.FindProcessOff:
 		helper.FindProcess = nil
-	case process.FindProcessOff:
-		helper.FindProcess = nil
+	}
+
+	if metadata.SpecialProxy != "" {
+		var exist bool
+		proxy, exist = proxies[metadata.SpecialProxy]
+		if !exist {
+			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
+		}
+		return
+	}
+
+	if node, ok := resolver.DefaultHosts.Search(metadata.Host, false); ok {
+		metadata.DstIP, _ = node.RandIP()
+		resolved = true
 	}
 
 	switch mode {
@@ -446,9 +450,15 @@ func handleUDPConn(packet C.PacketAdapter) {
 		return sender
 	})
 	if !loaded {
+		observe := statistic.CaptureConnection()
+		var finish func()
+		var readDone chan struct{}
 		dial := func() (C.PacketConn, C.WriteBackProxy, error) {
 			originMetadata := metadata  // save origin metadata
 			metadata = metadata.Clone() // don't modify PacketAdapter's metadata
+			if FindProcessMode() == process.FindProcessAlways {
+				resolveProcess(metadata)
+			}
 
 			if err := sender.DoSniff(metadata); err != nil {
 				log.Warnln("[UDP] DoSniff error: %s", err.Error())
@@ -482,7 +492,18 @@ func handleUDPConn(packet C.PacketAdapter) {
 			oAddrPort := dialMetadata.AddrPort()
 			writeBackProxy := nat.NewWriteBackProxy(packet)
 
-			go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
+			if observe != nil {
+				finish = observe(pc.Info())
+			}
+			if finish == nil {
+				go handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
+			} else {
+				readDone = make(chan struct{})
+				go func() {
+					defer close(readDone)
+					handleUDPToLocal(writeBackProxy, pc, sender, key, oAddrPort)
+				}()
+			}
 			return pc, writeBackProxy, nil
 		}
 
@@ -494,12 +515,17 @@ func handleUDPConn(packet C.PacketAdapter) {
 				return
 			}
 			sender.Process(pc, proxy)
+			if finish != nil {
+				<-readDone
+				finish()
+			}
 		}()
 	}
 	sender.Send(packet) // nonblocking
 }
 
 func handleTCPConn(connCtx C.ConnContext) {
+	observe := statistic.CaptureConnection()
 	if !isHandle(connCtx.Metadata().Type) {
 		_ = connCtx.Conn().Close()
 		return
@@ -515,6 +541,9 @@ func handleTCPConn(connCtx C.ConnContext) {
 		return
 	}
 	fixMetadata(metadata) // fix some metadata not set via metadata.SetRemoteAddr or metadata.SetRemoteAddress
+	if FindProcessMode() == process.FindProcessAlways {
+		resolveProcess(metadata)
+	}
 
 	preHandleFailed := false
 	if err := preHandleMetadata(metadata); err != nil {
@@ -612,7 +641,13 @@ func handleTCPConn(connCtx C.ConnContext) {
 	}
 	logMetadata(metadata, rule, remoteConn)
 
-	remoteConn = statistic.NewTCPTracker(remoteConn, statistic.DefaultManager, metadata, rule, int64(peekLen), 0, true)
+	tracker := statistic.NewTCPTracker(remoteConn, statistic.DefaultManager, metadata, rule, int64(peekLen), 0, true)
+	if observe != nil {
+		if finish := observe(tracker.Info()); finish != nil {
+			defer finish()
+		}
+	}
+	remoteConn = tracker
 	defer func(remoteConn C.Conn) {
 		_ = remoteConn.Close()
 	}(remoteConn)

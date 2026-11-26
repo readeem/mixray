@@ -98,6 +98,9 @@ func (s *packetSender) processPacket(pc C.PacketConn, packet C.PacketAdapter) {
 		s.AddMapping(originMetadata, metadata)
 		addr = metadata.UDPAddr()
 	}
+	if tracker, ok := pc.(interface{ ObserveDestination(string) }); ok {
+		tracker.ObserveDestination(packet.Metadata().RemoteAddress())
+	}
 	_ = handleUDPToRemote(packet, pc, addr)
 }
 

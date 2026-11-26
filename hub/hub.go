@@ -2,12 +2,19 @@ package hub
 
 import (
 	"github.com/readeem/mixray/config"
+	C "github.com/readeem/mixray/constant"
 	"github.com/readeem/mixray/hub/executor"
 	"github.com/readeem/mixray/hub/route"
 	"github.com/readeem/mixray/log"
 )
 
 type Option func(*config.Config)
+
+func WithEngine(engine C.Engine) Option {
+	return func(cfg *config.Config) {
+		cfg.General.Engine = engine
+	}
+}
 
 func WithExternalUI(externalUI string) Option {
 	return func(cfg *config.Config) {

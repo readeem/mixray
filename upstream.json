@@ -5,5 +5,23 @@
     "version": "v1.19.34",
     "sum": "h1:+nkzw4xRehvk2ldLHMelXszd0ES1ysE/ArL92KPfQno=",
     "gomod_sum": "h1:Hlv3FJhuInvgHLuaSRkBpn5+at5eFS5QlybKlZ5RJP4="
+  },
+  "vendored": {
+    "xray-core": {
+      "module": "github.com/xtls/xray-core",
+      "repo": "XTLS/Xray-core",
+      "path": "internal/xray-core",
+      "version": "v1.260327.1-0.20261109052709-676eaf66f8f0",
+      "sum": "h1:p2uoadP+ulClbJ9dn+QioF2SfBqRly6VoKJosHqwcRo=",
+      "gomod_sum": "h1:qOpfp0I7DlfhmEHyiv0OV+6jbalzb41EFGegv0UfzBE="
+    },
+    "sing-quic": {
+      "module": "github.com/metacubex/sing-quic",
+      "repo": "MetaCubeX/sing-quic",
+      "path": "internal/sing-quic",
+      "version": "v0.0.0-20260904234848-1c242664697a",
+      "sum": "h1:qZzQwtWDrPU1LXoMow0/iLHY3mb7uauS/mho8hYcenE=",
+      "gomod_sum": "h1:6ayFGfzzBE85csgQkM3gf4neFq6s0losHlPRSxY+nuk="
+    }
   }
 }

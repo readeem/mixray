@@ -27,8 +27,8 @@ import (
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httputil"
 	"github.com/metacubex/quic-go"
-	"github.com/metacubex/sing-quic/hysteria2"
-	"github.com/metacubex/sing-quic/hysteria2/realm"
+	"github.com/readeem/mixray/internal/sing-quic/hysteria2"
+	"github.com/readeem/mixray/internal/sing-quic/hysteria2/realm"
 	E "github.com/metacubex/sing/common/exceptions"
 	"github.com/metacubex/tls"
 )

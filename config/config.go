@@ -15,6 +15,7 @@ import (
 	"github.com/readeem/mixray/adapter/outbound"
 	"github.com/readeem/mixray/adapter/outboundgroup"
 	"github.com/readeem/mixray/adapter/provider"
+	"github.com/readeem/mixray/adapter/xray"
 	"github.com/readeem/mixray/common/orderedmap"
 	"github.com/readeem/mixray/common/utils"
 	"github.com/readeem/mixray/common/yaml"
@@ -48,6 +49,7 @@ import (
 type General struct {
 	Inbound
 	Mode              T.TunnelMode            `json:"mode"`
+	Engine            C.Engine                `json:"engine"`
 	UnifiedDelay      bool                    `json:"unified-delay"`
 	LogLevel          log.LogLevel            `json:"log-level"`
 	IPv6              bool                    `json:"ipv6"`
@@ -418,6 +420,7 @@ type RawConfig struct {
 	AllowLan                      bool                    `yaml:"allow-lan" json:"allow-lan"`
 	BindAddress                   string                  `yaml:"bind-address" json:"bind-address"`
 	Mode                          T.TunnelMode            `yaml:"mode" json:"mode"`
+	Engine                        C.Engine                `yaml:"engine" json:"engine"`
 	UnifiedDelay                  bool                    `yaml:"unified-delay" json:"unified-delay"`
 	LogLevel                      log.LogLevel            `yaml:"log-level" json:"log-level"`
 	IPv6                          bool                    `yaml:"ipv6" json:"ipv6"`
@@ -488,6 +491,7 @@ func DefaultRawConfig() *RawConfig {
 		LanAllowedIPs:     []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0"), netip.MustParsePrefix("::/0")},
 		IPv6:              true,
 		Mode:              T.Rule,
+		Engine:            C.EngineXray,
 		GeoAutoUpdate:     false,
 		GeoUpdateInterval: 24,
 		GeodataMode:       geodata.GeodataMode(),
@@ -762,6 +766,10 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 	if cfg.GlobalClientFingerprint != "" {
 		log.Errorln("The `global-client-fingerprint` configuration is removed, please set `client-fingerprint` directly on the proxy instead")
 	}
+	engine := cfg.Engine
+	if engine == "" {
+		engine = C.EngineXray
+	}
 	return &General{
 		Inbound: Inbound{
 			Port:              cfg.Port,
@@ -781,6 +789,7 @@ func parseGeneral(cfg *RawConfig) (*General, error) {
 		},
 		UnifiedDelay: cfg.UnifiedDelay,
 		Mode:         cfg.Mode,
+		Engine:       engine,
 		LogLevel:     cfg.LogLevel,
 		IPv6:         cfg.IPv6,
 		Interface:    cfg.Interface,
@@ -883,6 +892,8 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	proxiesConfig := cfg.Proxy
 	groupsConfig := cfg.ProxyGroup
 	providersConfig := cfg.ProxyProvider
+	prepare := xray.PrepareBatches(len(cfg.TLS.CustomTrustCert) != 0)
+	var parsed []xray.ParsedProxy
 
 	var (
 		proxyList  []string
@@ -911,7 +922,9 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		proxies[proxy.Name()] = proxy
 		proxyList = append(proxyList, proxy.Name())
 		AllProxies = append(AllProxies, proxy.Name())
+		parsed = append(parsed, xray.ParsedProxy{Proxy: proxy, Mapping: mapping})
 	}
+	prepare(parsed)
 
 	// keep the original order of ProxyGroups in config file
 	for idx, mapping := range groupsConfig {
@@ -937,7 +950,7 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 			return nil, nil, fmt.Errorf("can not defined a provider called `%s`", provider.ReservedName)
 		}
 
-		pd, err := provider.ParseProxyProvider(name, mapping, T.Tunnel)
+		pd, err := provider.ParseProxyProvider(name, mapping, T.Tunnel, prepare)
 		if err != nil {
 			return nil, nil, fmt.Errorf("parse proxy provider %s error: %w", name, err)
 		}

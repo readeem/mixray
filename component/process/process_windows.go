@@ -61,7 +61,7 @@ func initWin32API() error {
 	return nil
 }
 
-func findProcessName(network string, ip netip.Addr, srcPort int) (uint32, string, error) {
+func findProcessName(network string, ip netip.Addr, srcPort int, _ netip.AddrPort) (uint32, string, error) {
 	once.Do(func() {
 		err := initWin32API()
 		if err != nil {

@@ -14,6 +14,7 @@ import (
 	"github.com/readeem/mixray/adapter"
 	"github.com/readeem/mixray/adapter/inbound"
 	"github.com/readeem/mixray/adapter/outboundgroup"
+	"github.com/readeem/mixray/adapter/xray"
 	"github.com/readeem/mixray/component/auth"
 	"github.com/readeem/mixray/component/ca"
 	"github.com/readeem/mixray/component/dialer"
@@ -154,6 +155,7 @@ func GetGeneral() *config.General {
 			InboundMPTCP:      inbound.MPTCP(),
 		},
 		Mode:         tunnel.Mode(),
+		Engine:       xray.Engine(),
 		UnifiedDelay: adapter.UnifiedDelay.Load(),
 		LogLevel:     log.Level(),
 		IPv6:         !resolver.DisableIPv6,
@@ -308,7 +310,20 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 }
 
 func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
+	oldProxies, oldProviders := tunnel.Proxies(), tunnel.Providers()
 	tunnel.UpdateProxies(proxies, providers)
+	retireProxies(oldProxies, oldProviders)
+}
+
+func retireProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
+	for _, provider := range providers {
+		if owned, ok := provider.(interface{ RetireProxies() }); ok {
+			owned.RetireProxies()
+		}
+	}
+	for _, proxy := range proxies {
+		xray.RetireProxy(proxy)
+	}
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
@@ -392,6 +407,7 @@ func temporaryUpdateGeneral(general *config.General) func() {
 
 func updateGeneral(general *config.General, logging bool) {
 	tunnel.SetMode(general.Mode)
+	xray.SetEngine(general.Engine)
 	tunnel.SetFindProcessMode(general.FindProcessMode)
 	resolver.DisableIPv6 = !general.IPv6
 
@@ -530,6 +546,9 @@ func updateIPTables(cfg *config.Config) {
 }
 
 func Shutdown() {
+	mux.Lock()
+	defer mux.Unlock()
+	retireProxies(tunnel.Proxies(), tunnel.Providers())
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()

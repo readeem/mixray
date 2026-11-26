@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/readeem/mixray/adapter"
+	"github.com/readeem/mixray/adapter/xray"
 	"github.com/readeem/mixray/common/convert"
 	"github.com/readeem/mixray/common/utils"
 	"github.com/readeem/mixray/common/yaml"
@@ -49,6 +50,7 @@ type baseProvider struct {
 	proxies     []C.Proxy
 	healthCheck *HealthCheck
 	version     uint32
+	retired     bool
 }
 
 func (bp *baseProvider) Name() string {
@@ -103,11 +105,29 @@ func (bp *baseProvider) RegisterHealthCheckTask(url string, expectedStatus utils
 func (bp *baseProvider) setProxies(proxies []C.Proxy) {
 	bp.mutex.Lock()
 	defer bp.mutex.Unlock()
+	if bp.retired {
+		for _, proxy := range proxies {
+			xray.RetireProxy(proxy)
+		}
+		return
+	}
+	for _, proxy := range bp.proxies {
+		xray.RetireProxy(proxy)
+	}
 	bp.proxies = proxies
 	bp.version += 1
 	bp.healthCheck.setProxies(proxies)
 	if bp.healthCheck.auto() {
 		go bp.healthCheck.check()
+	}
+}
+
+func (bp *baseProvider) RetireProxies() {
+	bp.mutex.Lock()
+	defer bp.mutex.Unlock()
+	bp.retired = true
+	for _, proxy := range bp.proxies {
+		xray.RetireProxy(proxy)
 	}
 }
 
@@ -177,6 +197,7 @@ func (pp *proxySetProvider) closeAllConnections() {
 }
 
 func (pp *proxySetProvider) Close() error {
+	pp.RetireProxies()
 	_ = pp.baseProvider.Close()
 	return pp.Fetcher.Close()
 }
@@ -286,6 +307,7 @@ func NewInlineProvider(name string, payload []map[string]any, parser resource.Pa
 
 func (ip *InlineProvider) Close() error {
 	runtime.SetFinalizer(ip, nil)
+	ip.RetireProxies()
 	return ip.baseProvider.Close()
 }
 
@@ -340,7 +362,7 @@ func (cp *CompatibleProvider) Close() error {
 	return cp.compatibleProvider.Close()
 }
 
-func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string) (resource.Parser[[]C.Proxy], error) {
+func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilter string, excludeType string, dialerProxy string, override overrideSchema, ageSecretKey string, prepare xray.PrepareProxies) (resource.Parser[[]C.Proxy], error) {
 	var excludeTypeArray []string
 	if excludeType != "" {
 		excludeTypeArray = strings.Split(excludeType, "|")
@@ -394,6 +416,7 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 		}
 
 		proxies := []C.Proxy{}
+		var parsed []xray.ParsedProxy
 		proxiesSet := map[string]struct{}{}
 		for _, filterReg := range filterRegs {
 		LOOP1:
@@ -453,6 +476,9 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 
 				proxiesSet[name] = struct{}{}
 				proxies = append(proxies, proxy)
+				if prepare != nil {
+					parsed = append(parsed, xray.ParsedProxy{Proxy: proxy, Mapping: mapping})
+				}
 			}
 		}
 
@@ -463,6 +489,9 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 			return nil, errors.New("file doesn't have any proxy")
 		}
 
+		if prepare != nil {
+			prepare(parsed)
+		}
 		return proxies, nil
 	}, nil
 }

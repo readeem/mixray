@@ -33,7 +33,7 @@ var structSize = func() int {
 	}
 }()
 
-func findProcessName(network string, ip netip.Addr, port int) (uint32, string, error) {
+func findProcessName(network string, ip netip.Addr, port int, _ netip.AddrPort) (uint32, string, error) {
 	var spath string
 	switch network {
 	case TCP:

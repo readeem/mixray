@@ -10,7 +10,9 @@ import (
 var (
 	ErrInvalidNetwork     = errors.New("invalid network")
 	ErrPlatformNotSupport = errors.New("not support on this platform")
-	ErrNotFound           = errors.New("process not found")
+	ErrNotFound           = errors.New("socket not found")
+	ErrAmbiguousSocket    = errors.New("more than one socket matches")
+	ErrOwnerNotFound      = errors.New("socket owner not found")
 )
 
 const (
@@ -18,8 +20,8 @@ const (
 	UDP = "udp"
 )
 
-func FindProcessName(network string, srcIP netip.Addr, srcPort int) (uint32, string, error) {
-	return findProcessName(network, srcIP, srcPort)
+func FindProcessName(network string, srcIP netip.Addr, srcPort int, peer netip.AddrPort) (uint32, string, error) {
+	return findProcessName(network, srcIP, srcPort, peer)
 }
 
 // PackageNameResolver
