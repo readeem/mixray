@@ -2,7 +2,6 @@ module github.com/readeem/mixray
 
 go 1.27.4
 
-// lastest version compatible with golang1.20
 require (
 	github.com/apernet/quic-go v0.61.1-0.20260806010916-184d081eef3e
 	github.com/bahlo/generic-list-go v0.2.0

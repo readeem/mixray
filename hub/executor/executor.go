@@ -98,7 +98,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 
 	updateExperimental(cfg.Experimental)
 	updateUsers(cfg.Users)
-	updateProxies(cfg.Proxies, cfg.Providers)
+	updateProxies(cfg.Proxies, cfg.Providers, cfg.General.Engine)
 	updateRules(cfg.Rules, cfg.SubRules, cfg.RuleProviders)
 	updateSniffer(cfg.Sniffer)
 	updateHosts(cfg.Hosts)
@@ -309,9 +309,11 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 	resolver.DefaultHosts = resolver.NewHosts(tree)
 }
 
-func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
+func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider, engine C.Engine) {
 	oldProxies, oldProviders := tunnel.Proxies(), tunnel.Providers()
-	xray.AdoptBatches(oldProxies, proxies)
+	if engine == C.EngineXray {
+		xray.AdoptBatches(oldProxies, proxies)
+	}
 	tunnel.UpdateProxies(proxies, providers)
 	retireProxies(oldProxies, oldProviders, proxies)
 }

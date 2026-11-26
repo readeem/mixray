@@ -391,6 +391,9 @@ func patchConfigs(w http.ResponseWriter, r *http.Request) {
 
 	if general.Engine != nil {
 		xray.SetEngine(*general.Engine)
+		if *general.Engine == C.EngineMihomo {
+			xray.Stop(tunnel.Proxies())
+		}
 	}
 
 	if general.FindProcessMode != nil {

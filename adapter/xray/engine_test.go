@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
 	"math/big"
 	"net"
 	"slices"
@@ -145,6 +146,58 @@ func TestEngineSwitchUsesMihomoWithoutStartingXray(t *testing.T) {
 	conn.Close()
 	if bo.batch.engine != nil {
 		t.Fatal("mihomo engine mode started an Xray instance")
+	}
+}
+
+func TestStartReturnsStartupError(t *testing.T) {
+	restoreEngine(t, C.EngineXray)
+	want := errors.New("boom")
+	original := newOutbounds
+	newOutbounds = func([]ProxySpec, Network, *x509.CertPool) (*Outbounds, error) {
+		return nil, want
+	}
+	t.Cleanup(func() { newOutbounds = original })
+
+	mapping := map[string]any{
+		"name": "plain", "type": "vless", "server": "127.0.0.1", "port": 443,
+		"uuid": "92d696db-0166-464e-91bb-b65f72b3d665",
+	}
+	proxy := prepareProxy(t, mapping, PrepareBatches(false))
+	if err := Start(map[string]C.Proxy{"plain": proxy}); !errors.Is(err, want) {
+		t.Fatalf("Start() = %v, want %v", err, want)
+	}
+}
+
+func TestStopClosesAndAllowsRestart(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	restoreEngine(t, C.EngineXray)
+
+	mapping := map[string]any{
+		"name": "plain", "type": "vless", "server": "127.0.0.1", "port": listener.Addr().(*net.TCPAddr).Port,
+		"uuid": "92d696db-0166-464e-91bb-b65f72b3d665",
+	}
+	proxy := prepareProxy(t, mapping, PrepareBatches(false))
+	proxies := map[string]C.Proxy{"plain": proxy}
+	if err := Start(proxies); err != nil {
+		t.Fatal(err)
+	}
+	bo := proxy.(*adapter.Proxy).ProxyAdapter.(*batchedOutbound)
+	if bo.batch.engine == nil {
+		t.Fatal("Start did not initialize the Xray engine")
+	}
+	Stop(proxies)
+	if bo.batch.engine != nil {
+		t.Fatal("Stop did not close the Xray engine")
+	}
+	if err := Start(proxies); err != nil {
+		t.Fatalf("Start after Stop: %v", err)
+	}
+	if bo.batch.engine == nil {
+		t.Fatal("Start after Stop did not reinitialize the Xray engine")
 	}
 }
 

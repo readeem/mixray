@@ -91,6 +91,43 @@ func prepareBatches(customTrust bool, roots func() *x509.CertPool) PrepareProxie
 	}
 }
 
+// Start eagerly initializes every Xray outbound batch in proxies and returns
+// the first startup error instead of deferring initialization to the first dial.
+func Start(proxies map[string]C.Proxy) error {
+	seen := make(map[*outboundBatch]struct{})
+	for _, proxy := range proxies {
+		bo := batchOf(proxy)
+		if bo == nil {
+			continue
+		}
+		if _, ok := seen[bo.batch]; ok {
+			continue
+		}
+		seen[bo.batch] = struct{}{}
+		if err := bo.batch.start(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// Stop closes any running Xray engine for batches in proxies without retiring
+// them, so a subsequent switch back to EngineXray can start them again.
+func Stop(proxies map[string]C.Proxy) {
+	seen := make(map[*outboundBatch]struct{})
+	for _, proxy := range proxies {
+		bo := batchOf(proxy)
+		if bo == nil {
+			continue
+		}
+		if _, ok := seen[bo.batch]; ok {
+			continue
+		}
+		seen[bo.batch] = struct{}{}
+		bo.batch.stop()
+	}
+}
+
 func RetireProxy(proxy C.Proxy) {
 	if proxy == nil {
 		return
@@ -373,6 +410,7 @@ type outboundBatch struct {
 	useRoots bool
 	started  bool
 	engine   *Outbounds
+	startErr error
 	retired  bool
 }
 
@@ -382,11 +420,9 @@ func (b *outboundBatch) isRetired() bool {
 	return b.retired
 }
 
-func (b *outboundBatch) get(name string) (*Outbound, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+func (b *outboundBatch) ensureStartedLocked() error {
 	if b.retired {
-		return nil, net.ErrClosed
+		return net.ErrClosed
 	}
 	// Validation and rejected updates never start engines.
 	if !b.started {
@@ -395,19 +431,53 @@ func (b *outboundBatch) get(name string) (*Outbound, error) {
 		if b.roots != nil {
 			roots = b.roots()
 		}
-		b.roots = nil
 		if len(b.specs) != 0 {
-			engine, err := New(b.specs, MihomoNetwork{}, roots)
+			engine, err := newOutbounds(b.specs, MihomoNetwork{}, roots)
 			if err != nil {
 				log.Warnln("Xray outbounds unavailable: %s", err)
 			}
 			b.engine = engine
+			b.startErr = err
 		}
 	}
+	return b.startErr
+}
+
+var newOutbounds = New
+
+func (b *outboundBatch) start() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.ensureStartedLocked()
+}
+
+func (b *outboundBatch) get(name string) (*Outbound, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.retired {
+		return nil, net.ErrClosed
+	}
+	_ = b.ensureStartedLocked()
 	if b.engine == nil {
 		return nil, nil
 	}
 	return b.engine.Get(name), nil
+}
+
+func (b *outboundBatch) stop() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.retired {
+		return
+	}
+	b.started = false
+	b.startErr = nil
+	if b.engine != nil {
+		if err := b.engine.Close(); err != nil {
+			log.Warnln("Closing Xray outbounds: %s", err)
+		}
+		b.engine = nil
+	}
 }
 
 func (b *outboundBatch) retire() {
@@ -415,6 +485,7 @@ func (b *outboundBatch) retire() {
 	defer b.mu.Unlock()
 	b.retired = true
 	b.started = true
+	b.startErr = nil
 	b.roots = nil
 	if b.engine != nil {
 		if err := b.engine.Close(); err != nil {

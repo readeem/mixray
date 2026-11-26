@@ -97,6 +97,29 @@ func TestReloadAndProviderRefreshRetireActiveOutbounds(t *testing.T) {
 		requireRetired(t, second.Proxies["Same"], wire)
 	})
 
+	t.Run("switching to mihomo retires active Xray batch", func(t *testing.T) {
+		first := parse(t, append([]byte("engine: xray\n"), payload("Same")...))
+		executor.ApplyConfig(first, true)
+		t.Cleanup(executor.Shutdown)
+		wire := holdOutbound(t, listener, first.Proxies["Same"])
+
+		second := parse(t, append([]byte("engine: mihomo\n"), payload("Same")...))
+		executor.ApplyConfig(second, true)
+		if err := wire.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := io.Copy(io.Discard, wire); err != nil {
+			t.Fatalf("switching to mihomo did not close active Xray socket: %v", err)
+		}
+
+		third := parse(t, append([]byte("engine: xray\n"), payload("Same")...))
+		executor.ApplyConfig(third, true)
+		if err := xray.Start(third.Proxies); err != nil {
+			t.Fatalf("xray.Start after switching back: %v", err)
+		}
+		holdOutbound(t, listener, third.Proxies["Same"])
+	})
+
 	t.Run("wrapped proxy retires", func(t *testing.T) {
 		type wrapped struct{ C.Proxy }
 		cfg := parse(t, payload("Wrapped"))
