@@ -73,7 +73,7 @@ require (
 	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.25.0
 	golang.org/x/sys v0.49.0
-	google.golang.org/protobuf v1.34.2
+	google.golang.org/protobuf v1.36.12
 )
 
 require (
@@ -97,7 +97,7 @@ require (
 	github.com/gobwas/httphead v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/go-cmp v0.6.0 // indirect
+	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20240727154555-813a5fbdbec8 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/josharian/native v1.1.0 // indirect
