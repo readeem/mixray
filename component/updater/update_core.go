@@ -39,6 +39,9 @@ const (
 const (
 	ReleaseChannel = "release"
 	AlphaChannel   = "alpha"
+
+	// Mihomo clients match this message to display the up-to-date notification.
+	alreadyLatest = "update error: already using latest version %s"
 )
 
 // CoreUpdater is the mihomo updater.
@@ -87,7 +90,7 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	defer u.mu.Unlock()
 
 	if u.DisableStockUpdate {
-		return fmt.Errorf("stock core updates are unavailable for this build")
+		return fmt.Errorf(alreadyLatest, C.Version)
 	}
 
 	info, err := os.Stat(currentExePath)
@@ -117,8 +120,7 @@ func (u *CoreUpdater) Update(currentExePath string, channel string, force bool) 
 	log.Infoln("current version %s, latest version %s", C.Version, latestVersion)
 
 	if latestVersion == C.Version && !force {
-		// don't change this output, some downstream dependencies on the upgrader's output fields
-		return fmt.Errorf("update error: already using latest version %s", C.Version)
+		return fmt.Errorf(alreadyLatest, C.Version)
 	}
 
 	defer func() {
