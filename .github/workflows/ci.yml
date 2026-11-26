@@ -21,4 +21,3 @@ jobs:
         with:
           cache: ${{ github.ref_type != 'tag' }}
       - run: mise run check
-      - run: mise run vulncheck

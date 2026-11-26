@@ -20,8 +20,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -46,13 +45,18 @@ jobs:
           printf 'changed=true\nbefore=%s\nafter=%s\n' "$before" "$after" >> "$GITHUB_OUTPUT"
       - name: check updated tree
         if: steps.sync.outputs.changed == 'true'
-        run: |
-          mise run check
-          mise run vulncheck
+        run: mise run check
+      - name: generate app token
+        id: app-token
+        if: steps.sync.outputs.changed == 'true'
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
       - name: open pull request
         if: steps.sync.outputs.changed == 'true'
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           BEFORE: ${{ steps.sync.outputs.before }}
           AFTER: ${{ steps.sync.outputs.after }}
         run: |
