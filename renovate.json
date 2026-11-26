@@ -2,11 +2,35 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", "helpers:pinGitHubActionDigests"],
   "baseBranchPatterns": ["main"],
+  "dependencyDashboard": { "enabled": false },
+  "automerge": true,
+  "platformAutomerge": false,
+  "gomod": {
+    "postUpdateOptions": ["gomodTidy"]
+  },
   "packageRules": [
     {
       "matchManagers": ["gomod"],
       "matchDepTypes": ["indirect"],
       "enabled": true
+    },
+    {
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "rangeStrategy": "bump"
+    },
+    {
+      "matchManagers": ["gomod", "mise"],
+      "matchDepNames": ["go"],
+      "overrideDatasource": "golang-version",
+      "overridePackageName": "go",
+      "extractVersion": "^(?<version>.+)$",
+      "groupName": "Go toolchain"
+    },
+    {
+      "matchManagers": ["mise"],
+      "matchPackageNames": ["golang.org/x/vuln/cmd/govulncheck"],
+      "overridePackageName": "golang.org/x/vuln"
     }
   ]
 }

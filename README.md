@@ -4,8 +4,10 @@ Rule-based proxy core built on upstream [MetaCubeX/mihomo](https://github.com/Me
 
 ## License & Attribution
 
-Licensed under the [GNU General Public License v3.0](LICENSE).
+The software is licensed under the [GNU General Public License v3.0](LICENSE).
 Built from upstream [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) (GPL-3.0). `mixray` is an independent downstream project and is not affiliated with MetaCubeX.
+
+[The project icon](assets/logo.svg) is Readeem’s personal logo and is subject to separate proprietary terms. © 2026 Readeem. All rights reserved.
 
 ## Development
 
