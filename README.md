@@ -1,6 +1,13 @@
-# mixray
+<div align="center">
 
-Rule-based proxy core built on upstream [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) (routing, rules, DNS, TUN, external controller) with native Xray-core outbound support, packaged as both a standalone cross-platform binary and an importable Go module (`github.com/readeem/mixray`).
+<h1>
+  <img src="assets/logo.svg" alt="" height="32">
+  mixray
+</h1>
+
+A mixed combination of [MetaCubeX/mihomo](https://github.com/MetaCubeX/mihomo) and Xray-core in one binary.
+
+</div>
 
 ## License & Attribution
 
