@@ -259,16 +259,23 @@ func TestRealityClientHelloOffersHybridKeyExchange(t *testing.T) {
 	xray.SetEngine(C.EngineXray)
 	t.Cleanup(func() { xray.SetEngine(originalEngine) })
 
+	const xhttpFallback = `
+    network: xhttp
+    xhttp-opts: {mode: packet-up, sc-max-each-post-bytes: '65536'}`
+
 	for _, tc := range []struct {
-		name, fingerprint string
-		hybrid            *bool
-		wantHybrid        bool
+		name, fingerprint, transport string
+		hybrid                       *bool
+		wantHybrid                   bool
 	}{
 		{name: "chrome default", fingerprint: "chrome", wantHybrid: true},
 		{name: "firefox default", fingerprint: "firefox", wantHybrid: true},
 		{name: "explicit hybrid", fingerprint: "chrome", hybrid: new(true), wantHybrid: true},
 		{name: "explicit legacy", fingerprint: "chrome", hybrid: new(false)},
 		{name: "legacy fingerprint preserved", fingerprint: "firefox120", hybrid: new(true)},
+		{name: "XHTTP fallback default", fingerprint: "chrome", transport: xhttpFallback, wantHybrid: true},
+		{name: "XHTTP fallback explicit hybrid", fingerprint: "chrome", transport: xhttpFallback, hybrid: new(true), wantHybrid: true},
+		{name: "XHTTP fallback explicit legacy", fingerprint: "chrome", transport: xhttpFallback, hybrid: new(false)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			hellos := make(chan bool, 1)
@@ -308,9 +315,9 @@ proxies:
     uuid: 00000000-0000-4000-8000-000000000001
     tls: true
     servername: donor.example
-    client-fingerprint: %s
+    client-fingerprint: %s%s
     reality-opts: {public-key: %s, short-id: 0123456789abcdef%s}
-`, host, port, tc.fingerprint, base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), hybridLine)
+`, host, port, tc.fingerprint, tc.transport, base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes()), hybridLine)
 
 			cfg, err := executor.ParseWithBytes([]byte(yamlCfg))
 			if err != nil {
